@@ -28,7 +28,7 @@ if is_sklearn_available():
 from ..cache_utils import DynamicCache
 from ..pytorch_utils import isin_mps_friendly
 from .logits_process import LogitsProcessorList, MinLengthLogitsProcessor
-
+from .stopping_criteria import StoppingCriteria
 
 if TYPE_CHECKING:
     from ..modeling_utils import PreTrainedModel
@@ -326,6 +326,52 @@ class AssistedCandidateGenerator(CandidateGenerator):
         candidate_ids = assistant_output.sequences
         return candidate_ids, candidate_logits
 
+
+class MaxNumRunsCritieria(StoppingCriteria):
+    def __init__(self, max_num_run: int):
+        self.max_num_run = max_num_run
+        self.cur_num_run = 0
+
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
+    ) -> torch.BoolTensor:
+        self.cur_num_run += 1
+        return self.cur_num_run % self.max_num_run == 0
+
+
+class BlazeditCandidateGenerator(AssistedCandidateGenerator):
+    def __init__(
+        self,
+        input_ids: torch.LongTensor,
+        assistant_model: "PreTrainedModel",
+        generation_config: "GenerationConfig",
+        model_kwargs: Dict,
+        inputs_tensor: Optional[torch.Tensor] = None,
+        logits_processor: "LogitsProcessorList" = None,
+        blazedit_config: Dict[str, int] = None,
+    ):
+        assert (
+            generation_config.prompt_lookup_num_tokens is None
+        ), "Do not set prompt_lookup_num_tokens for blazedit"
+        assert generation_config.max_matching_ngram_size is None, "Do not set max_matching_ngram_size for blazedit"
+
+        assistant_model.generation_config.assistant_confidence_threshold = None # disabled for pld
+        super().__init__(input_ids, assistant_model, generation_config, model_kwargs, inputs_tensor, logits_processor)
+
+        self.micro_draft_tokens = blazedit_config["micro_draft_tokens"]
+        self.max_num_runs = blazedit_config.get("max_num_runs", 4)
+        self.max_matching_ngram_size = blazedit_config.get("max_matching_ngram_size", 10)
+
+        self.num_assistant_tokens = self.micro_draft_tokens * self.max_num_runs
+        self.assistant_model.generation_config.num_assistant_tokens = self.num_assistant_tokens
+
+    def _generate_candidates(self, generation_args):
+        generation_args["prompt_lookup_num_tokens"] = self.micro_draft_tokens
+        generation_args["max_matching_ngram_size"] = self.max_matching_ngram_size
+        generation_args["stopping_criteria"] = generation_args.get(
+            "stopping_criteria", []
+        ) + [MaxNumRunsCritieria(self.max_num_runs)]
+        return super()._generate_candidates(generation_args)
 
 class AssistedCandidateGeneratorDifferentTokenizers(AssistedCandidateGenerator):
     """

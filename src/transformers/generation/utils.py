@@ -53,6 +53,7 @@ from .beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScor
 from .candidate_generator import (
     AssistedCandidateGenerator,
     AssistedCandidateGeneratorDifferentTokenizers,
+    BlazeditCandidateGenerator,
     CandidateGenerator,
     EarlyExitCandidateGenerator,
     PromptLookupCandidateGenerator,
@@ -821,6 +822,7 @@ class GenerationMixin:
         logits_processor: LogitsProcessorList,
         target_tokenizer: "PreTrainedTokenizerBase",
         assistant_tokenizer: "PreTrainedTokenizerBase",
+        blazedit_config: Optional[Dict[str, int]],
         model_kwargs: Dict,
     ) -> CandidateGenerator:
         """
@@ -854,6 +856,16 @@ class GenerationMixin:
                 logits_processor=logits_processor,
                 target_tokenizer=target_tokenizer,
                 assistant_tokenizer=assistant_tokenizer,
+            )
+        elif blazedit_config:
+            candidate_generator = BlazeditCandidateGenerator(
+                input_ids=input_ids,
+                assistant_model=assistant_model,
+                generation_config=generation_config,
+                model_kwargs=model_kwargs,
+                inputs_tensor=inputs_tensor,
+                logits_processor=logits_processor,
+                blazedit_config=blazedit_config,
             )
         else:
             candidate_generator = AssistedCandidateGenerator(
@@ -1913,6 +1925,7 @@ class GenerationMixin:
         prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
+        blazedit_config: Optional[dict] = None,
         streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
@@ -2191,6 +2204,7 @@ class GenerationMixin:
                 logits_processor=logits_processor,
                 target_tokenizer=tokenizer,
                 assistant_tokenizer=assistant_tokenizer,
+                blazedit_config=blazedit_config,
                 model_kwargs=model_kwargs,
             )
 
