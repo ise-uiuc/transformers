@@ -15,6 +15,8 @@
 
 import copy
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import List
 
 import numpy as np
 import torch
@@ -36,9 +38,13 @@ if TYPE_CHECKING:
     from .configuration_utils import GenerationConfig
 
 
+@dataclass
+class AcceptanceTracker:
+    proposed: List[int]
+    accepted: List[int]
+    
 class CandidateGenerator:
     """Abstract base class for all candidate generators that can be applied during assisted generation."""
-
     def get_candidates(self, input_ids: torch.LongTensor) -> Tuple[torch.LongTensor, Optional[torch.FloatTensor]]:
         """
         Fetches the candidates to be tried for the current input.
@@ -106,6 +112,7 @@ class AssistedCandidateGenerator(CandidateGenerator):
         model_kwargs: Dict,
         inputs_tensor: Optional[torch.Tensor] = None,
         logits_processor: "LogitsProcessorList" = None,
+        acceptance_tracker: AcceptanceTracker = None
     ):
         # Make sure all data at the same device as assistant model
         device = assistant_model.device
@@ -117,6 +124,7 @@ class AssistedCandidateGenerator(CandidateGenerator):
         self.assistant_model = assistant_model
         self.num_assistant_tokens = assistant_model.generation_config.num_assistant_tokens
         self.assistant_confidence_threshold = assistant_model.generation_config.assistant_confidence_threshold
+        self.acceptance_tracker = acceptance_tracker
 
         # Set eos in assistant same as in target model
         self.assistant_model.generation_config.eos_token_id = generation_config.eos_token_id
@@ -217,6 +225,10 @@ class AssistedCandidateGenerator(CandidateGenerator):
         # Generate candidates
         generation_args = self._prepare_generation_args(input_ids, min_new_tokens, max_new_tokens)
         candidate_ids, candidate_logits = self._generate_candidates(generation_args)
+
+        if self.acceptance_tracker:
+            self.acceptance_tracker.proposed.append(int(candidate_ids.shape[-1]) - int(input_ids.shape[-1]))
+
         return candidate_ids, candidate_logits
 
     def update_candidate_strategy(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, num_matches: int):
@@ -232,6 +244,10 @@ class AssistedCandidateGenerator(CandidateGenerator):
             num_matches (`int`):
                 The number of matches between the candidate sequences and the model predictions.
         """
+
+        if self.acceptance_tracker:
+            self.acceptance_tracker.accepted.append(int(num_matches))
+
         # Adjust the max number of assistant tokens to use in the next iteration. This is a simple heuristic,
         # probably can be improved -- we want to balance the benefits of getting assistant tokens correct with the
         # cost of forecasting incorrect assistant tokens.
@@ -349,6 +365,7 @@ class BlazeditCandidateGenerator(AssistedCandidateGenerator):
         inputs_tensor: Optional[torch.Tensor] = None,
         logits_processor: "LogitsProcessorList" = None,
         blazedit_config: Dict[str, int] = None,
+        acceptance_tracker: AcceptanceTracker = None
     ):
         assert (
             generation_config.prompt_lookup_num_tokens is None
@@ -356,7 +373,7 @@ class BlazeditCandidateGenerator(AssistedCandidateGenerator):
         assert generation_config.max_matching_ngram_size is None, "Do not set max_matching_ngram_size for blazedit"
 
         assistant_model.generation_config.assistant_confidence_threshold = None # disabled for pld
-        super().__init__(input_ids, assistant_model, generation_config, model_kwargs, inputs_tensor, logits_processor)
+        super().__init__(input_ids, assistant_model, generation_config, model_kwargs, inputs_tensor, logits_processor, acceptance_tracker=acceptance_tracker)
 
         self.micro_draft_tokens = blazedit_config["micro_draft_tokens"]
         self.max_num_runs = blazedit_config.get("max_num_runs", 4)
@@ -416,8 +433,9 @@ class AssistedCandidateGeneratorDifferentTokenizers(AssistedCandidateGenerator):
         model_kwargs: Dict,
         inputs_tensor: Optional[torch.Tensor] = None,
         logits_processor: "LogitsProcessorList" = None,
+        acceptance_tracker: Optional[AcceptanceTracker] = None
     ):
-        super().__init__(input_ids, assistant_model, generation_config, model_kwargs, inputs_tensor, logits_processor)
+        super().__init__(input_ids, assistant_model, generation_config, model_kwargs, inputs_tensor, logits_processor, acceptance_tracker=acceptance_tracker)
 
         self.target_tokenizer = target_tokenizer
         self.assistant_tokenizer = assistant_tokenizer
@@ -677,11 +695,13 @@ class PromptLookupCandidateGenerator(CandidateGenerator):
         num_output_tokens: int = 10,
         max_matching_ngram_size: int = None,
         max_length: int = 20,
+        acceptance_tracker: AcceptanceTracker = None
     ):
         self.num_output_tokens = num_output_tokens
         self.max_matching_ngram_size = max_matching_ngram_size if max_matching_ngram_size else 2
         self.max_length = max_length
         self.eos_token_id = eos_token_id
+        self.acceptance_tracker = acceptance_tracker
 
         if self.max_matching_ngram_size <= 0 or self.num_output_tokens <= 0:
             raise ValueError("Invalid max_matching_ngram_size or num_output_tokens")
@@ -742,10 +762,14 @@ class PromptLookupCandidateGenerator(CandidateGenerator):
 
         if chosen_ids is None or len(chosen_ids) == 0:
             # In case we didn't find a match return the input sequence unchanged, reverts back to autoregressive decoding
+            if self.acceptance_tracker:
+                self.acceptance_tracker.proposed.append(0)
             return input_ids, None
 
         # Now need extend input_ids with chosen_ids
         chosen_ids = chosen_ids.unsqueeze(0)
+        if self.acceptance_tracker:
+            self.acceptance_tracker.proposed.append(int(chosen_ids.shape[-1]))
         candidate_input_ids = torch.cat((input_ids, chosen_ids), dim=1)
         # assisted_generation expects logits as well, but we don't have those here, so returning None
         return candidate_input_ids, None
@@ -764,6 +788,8 @@ class PromptLookupCandidateGenerator(CandidateGenerator):
                 The number of matches between the candidate sequences and the model predictions.
         """
         # Currently does nothing
+        if self.acceptance_tracker:
+            self.acceptance_tracker.accepted.append(int(num_matches))
         return
 
 

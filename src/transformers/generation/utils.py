@@ -55,6 +55,7 @@ from .candidate_generator import (
     AssistedCandidateGeneratorDifferentTokenizers,
     BlazeditCandidateGenerator,
     CandidateGenerator,
+    AcceptanceTracker,
     EarlyExitCandidateGenerator,
     PromptLookupCandidateGenerator,
     _crop_past_key_values,
@@ -828,6 +829,7 @@ class GenerationMixin:
         target_tokenizer: "PreTrainedTokenizerBase",
         assistant_tokenizer: "PreTrainedTokenizerBase",
         blazedit_config: Optional[Dict[str, int]],
+        acceptance_tracker: Optional[AcceptanceTracker],
         model_kwargs: Dict,
     ) -> CandidateGenerator:
         """
@@ -850,6 +852,7 @@ class GenerationMixin:
                 num_output_tokens=generation_config.prompt_lookup_num_tokens,
                 max_matching_ngram_size=generation_config.max_matching_ngram_size,
                 max_length=generation_config.max_length,
+                acceptance_tracker=acceptance_tracker
             )
         elif different_tokenizers:
             candidate_generator = AssistedCandidateGeneratorDifferentTokenizers(
@@ -861,6 +864,7 @@ class GenerationMixin:
                 logits_processor=logits_processor,
                 target_tokenizer=target_tokenizer,
                 assistant_tokenizer=assistant_tokenizer,
+                acceptance_tracker=acceptance_tracker
             )
         elif blazedit_config:
             candidate_generator = BlazeditCandidateGenerator(
@@ -871,6 +875,7 @@ class GenerationMixin:
                 inputs_tensor=inputs_tensor,
                 logits_processor=logits_processor,
                 blazedit_config=blazedit_config,
+                acceptance_tracker=acceptance_tracker
             )
         else:
             candidate_generator = AssistedCandidateGenerator(
@@ -880,6 +885,7 @@ class GenerationMixin:
                 model_kwargs=model_kwargs,
                 inputs_tensor=inputs_tensor,
                 logits_processor=logits_processor,
+                acceptance_tracker=acceptance_tracker
             )
         return candidate_generator
 
@@ -1899,6 +1905,7 @@ class GenerationMixin:
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
         blazedit_config: Optional[dict] = None,
+        acceptance_tracker: Optional[AcceptanceTracker] = None,
         streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
@@ -2175,6 +2182,7 @@ class GenerationMixin:
                 target_tokenizer=tokenizer,
                 assistant_tokenizer=assistant_tokenizer,
                 blazedit_config=blazedit_config,
+                acceptance_tracker=acceptance_tracker,
                 model_kwargs=model_kwargs,
             )
 
